@@ -103,7 +103,7 @@ in
       entries = mkOption {
         internal = true;
         type = types.listOf entryModule;
-        default = [];
+        default = [ ];
         description = "News entries.";
       };
     };

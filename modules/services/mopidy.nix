@@ -10,13 +10,14 @@ let
   # some quirky handling of its types. You can see how they're handled in
   # `mopidy/config/types.py` from the source code.
   toMopidyConf = generators.toINI {
-    mkKeyValue = generators.mkKeyValueDefault {
-      mkValueString = v:
-        if isList v then
-          "\n  " + concatStringsSep "\n  " v
-        else
-          generators.mkValueStringDefault { } v;
-    } " = ";
+    mkKeyValue = generators.mkKeyValueDefault
+      {
+        mkValueString = v:
+          if isList v then
+            "\n  " + concatStringsSep "\n  " v
+          else
+            generators.mkValueStringDefault { } v;
+      } " = ";
   };
 
   mopidyEnv = pkgs.buildEnv {
@@ -31,14 +32,15 @@ let
   };
 
   # Nix-representable format for Mopidy config.
-  mopidyConfFormat = { }: {
+  mopidyConfFormat = {}: {
     type = with types;
       let
         valueType = nullOr (oneOf [ bool float int str (listOf valueType) ])
           // {
-            description = "Mopidy config value";
-          };
-      in attrsOf (attrsOf valueType);
+          description = "Mopidy config value";
+        };
+      in
+      attrsOf (attrsOf valueType);
 
     generate = name: value: pkgs.writeText name (toMopidyConf value);
   };
@@ -48,7 +50,8 @@ let
   configFilePaths = concatStringsSep ":"
     ([ "${config.xdg.configHome}/mopidy/mopidy.conf" ] ++ cfg.extraConfigFiles);
 
-in {
+in
+{
   meta.maintainers = [ hm.maintainers.foo-dogsquared ];
 
   options.services.mopidy = {
@@ -110,6 +113,57 @@ in {
         structured settings.
       '';
     };
+
+    network = {
+      startWhenNeeded = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Enable systemd socket activation.
+        '';
+      };
+
+      listen = mkOption {
+        type = types.enum [ "tcp" "unix" ];
+        default = "tcp";
+        description = ''
+          Whether to listen over TCP or UNIX socket.
+          The path of the UNIX socket is
+          <literal>$XDG_RUNTIME_DIR/mopidy/socket</literal>.
+        '';
+      };
+
+      listenAddress = mkOption {
+        type = types.str;
+        default = "127.0.0.1";
+        example = "any";
+        description = ''
+          The address for the daemon to listen on.
+          Use <literal>any</literal> to listen on all addresses.
+        '';
+      };
+
+      port = mkOption {
+        type = types.port;
+        default = 6680;
+        example = 6600;
+        description = ''
+          The port on which the the daemon will listen.
+        '';
+      };
+
+      fileDescriptorName = mkOption {
+        type = types.str;
+        default = "http";
+        example = "mpd";
+        description = ''
+          Name for the file descriptor of this socket. The HTTP extension
+          expects this to be <literal>http</literal>, while the MPD extension
+          expects <literal>mpd</literal>.
+        '';
+      };
+
+    };
   };
 
   config = mkIf cfg.enable {
@@ -130,7 +184,9 @@ in {
         ExecStart = "${mopidyEnv}/bin/mopidy --config ${configFilePaths}";
       };
 
-      Install.WantedBy = [ "default.target" ];
+      Install = mkIf (!cfg.network.startWhenNeeded) {
+        WantedBy = [ "default.target" ];
+      };
     };
 
     systemd.user.services.mopidy-scan = {
@@ -147,6 +203,29 @@ in {
       };
 
       Install.WantedBy = [ "default.target" ];
+    };
+
+    systemd.user.sockets.mopidy = mkIf cfg.network.startWhenNeeded {
+      Socket = {
+        ListenStream =
+          if cfg.network.listen == "tcp"
+          then
+            let
+              listen =
+                if cfg.network.listenAddress == "any" then
+                  toString cfg.network.port
+                else
+                  "${cfg.network.listenAddress}:${toString cfg.network.port}";
+            in
+            [ listen ]
+          else [ "%t/mopidy/socket" ];
+        FileDescriptorName = cfg.network.fileDescriptorName;
+
+        Backlog = 5;
+        KeepAlive = true;
+      };
+
+      Install = { WantedBy = [ "sockets.target" ]; };
     };
   };
 }
